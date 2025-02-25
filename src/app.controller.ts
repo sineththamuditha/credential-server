@@ -1,15 +1,17 @@
-import { Body, Controller, Get, Post } from '@nestjs/common';
-import { AppService } from './app.service';
+import { Body, Controller, Get, Param, Post } from '@nestjs/common';
 import { DataService } from './services/data.service';
 import { CredentialService } from './services/credential.service';
 import { CREDENTIAL_KEYS } from './constants';
+import { VerifiableCredential, VerifiablePresentation } from '@veramo/core';
+import { DIDService } from './services/did.service';
+import { IPackedDIDCommMessage } from '@veramo/did-comm';
 
 @Controller()
 export class AppController {
   constructor(
-    private readonly appService: AppService,
     private readonly dataService: DataService,
     private readonly credentialService: CredentialService,
+    private readonly didService: DIDService,
   ) {}
 
   @Get('/health')
@@ -30,7 +32,7 @@ export class AppController {
 
   @Post('/supervisor/library-credential/set')
   saveSupervisorLibraryCredential(
-    @Body() supervisorLibraryCredential: { [key: string]: any },
+    @Body() supervisorLibraryCredential: VerifiableCredential,
   ): { [key: string]: string } {
     this.dataService.setData(
       CREDENTIAL_KEYS.SUPERVISOR_LIBRARY_CREDENTIAL_KEY,
@@ -49,5 +51,35 @@ export class AppController {
     return await this.credentialService.getDoctorCredential(
       accessDelegationCredential,
     );
+  }
+
+  @Get('/credentials/:did')
+  async getEmployeeCredential(
+    @Param('did') did: string,
+  ): Promise<VerifiableCredential> {
+    return await this.credentialService.getEmployeeCredential(did);
+  }
+
+  @Post('/adc')
+  async getAccessDelegationCredential(
+    @Body() verifiablePresentation: VerifiablePresentation,
+  ): Promise<VerifiableCredential> {
+    return await this.credentialService.getAccessDelegationCredential(
+      verifiablePresentation,
+    );
+  }
+
+  @Get('company/did')
+  getCompanyDID(): { companyDID: string } {
+    return {
+      companyDID: this.didService.getCompanyIdentifier().did,
+    };
+  }
+
+  @Post('/company/company-credential/get')
+  async getCompanyCredential(
+    @Body() packedMessage: any,
+  ): Promise<IPackedDIDCommMessage> {
+    return await this.credentialService.getCompanyCredential(packedMessage);
   }
 }

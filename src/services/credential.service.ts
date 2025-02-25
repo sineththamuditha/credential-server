@@ -1,23 +1,43 @@
+/* eslint-disable @typescript-eslint/no-unsafe-assignment */
+/* eslint-disable @typescript-eslint/no-unsafe-argument */
+/* eslint-disable @typescript-eslint/no-unsafe-call */
+/* eslint-disable @typescript-eslint/no-unsafe-return */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access */
 import { HttpService } from '@nestjs/axios';
 import { HttpException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AxiosResponse } from 'axios';
 import { firstValueFrom } from 'rxjs';
-import { OPAResponse } from 'src/dtos/OpaDtos';
 import { DataService } from './data.service';
-import { CREDENTIAL_KEYS } from 'src/constants';
-import { VerifiableCredential } from '@veramo/core';
+import {
+  CredentialSubject,
+  IVerifyResult,
+  VerifiableCredential,
+  VerifiablePresentation,
+  W3CVerifiableCredential,
+} from '@veramo/core';
+import { DIDService } from './did.service';
+import { differenceInYears } from 'date-fns';
+import { OPAResponse } from '../dtos/OpaDtos';
+import { CREDENTIAL_KEYS } from '../constants';
+import {
+  IDIDCommMessage,
+  IPackedDIDCommMessage,
+  IUnpackedDIDCommMessage,
+} from '@veramo/did-comm';
 
 @Injectable()
 export class CredentialService {
   private readonly logger = new Logger(CredentialService.name);
   private OPA_BASE_URL: string;
   private ARIES_CLOUD_AGENT_BASE_URL: string;
+  private SERVICE_ENDPOINT_BASE_URL: string;
 
   constructor(
     private readonly httpService: HttpService,
     private readonly dataService: DataService,
-    private configService: ConfigService,
+    private readonly configService: ConfigService,
+    private readonly didService: DIDService,
   ) {
     const opaBaseUrl: string | undefined =
       this.configService.get<string>('OPA_BASE_URL');
@@ -33,6 +53,14 @@ export class CredentialService {
       this.ARIES_CLOUD_AGENT_BASE_URL = ariesBaseUrl;
     } else {
       throw new Error('OPA base url is not found');
+    }
+
+    const serviceEndpointBaseUrl: string | undefined =
+      this.configService.get<string>('SERVICE_ENDPOINT_BASE_URL');
+    if (serviceEndpointBaseUrl) {
+      this.SERVICE_ENDPOINT_BASE_URL = serviceEndpointBaseUrl;
+    } else {
+      throw new Error('Service endpoint base url is not found');
     }
   }
 
@@ -89,7 +117,6 @@ export class CredentialService {
       }
 
       try {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         const credentialId: string =
           accessDelegationCredential['credentialSubject']['credentialId'];
 
@@ -107,6 +134,234 @@ export class CredentialService {
           404,
         );
       }
+    } catch (error) {
+      if (error instanceof HttpException) {
+        throw error;
+      }
+      console.log(error);
+      console.log('Encountered error when checking policies');
+      throw new HttpException('API request failed', 500);
+    }
+  }
+
+  async getEmployeeCredential(
+    employeeDID: string,
+  ): Promise<VerifiableCredential> {
+    this.dataService.setData(
+      CREDENTIAL_KEYS.COMPANY_CREDENTIAL_KEY,
+      await this.didService.getAgent().createVerifiableCredential({
+        credential: {
+          '@context': ['https://www.w3.org/2018/credentials/v1'],
+          type: ['VerifiableCredential', 'CompanyCredential'],
+          issuer: this.didService.getGovernmentIdentifier().did,
+          issuanceDate: new Date().toISOString(),
+          id: crypto.randomUUID(),
+          credentialSubject: {
+            id: this.didService.getCompanyIdentifier().did,
+            name: 'ABC Company',
+            address: '124/1, Kirillawala, Mahara',
+          },
+        },
+        proofFormat: 'jwt',
+      }),
+    );
+
+    return await this.didService.getAgent().createVerifiableCredential({
+      credential: {
+        '@context': ['https://www.w3.org/2018/credentials/v1'],
+        type: ['VerifiableCredential', 'EmployeeCredential'],
+        issuer: this.didService.getCompanyIdentifier().did,
+        issuanceDate: new Date().toISOString(),
+        id: crypto.randomUUID(),
+        credentialSubject: {
+          id: employeeDID,
+          name: 'Saman Kumara',
+          employeeId: 'E20041674',
+          position: 'Manager',
+          department: 'Sales',
+          joinedDate: new Date('2019-01-01').toISOString(),
+        },
+      },
+      proofFormat: 'jwt',
+    });
+  }
+
+  async getAccessDelegationCredential(
+    verifiablePresentation: VerifiablePresentation,
+  ): Promise<VerifiableCredential> {
+    const verificationResult: IVerifyResult = await this.didService
+      .getAgent()
+      .verifyPresentation({
+        presentation: verifiablePresentation,
+      });
+
+    if (!verificationResult.verified) {
+      throw new Error('Invalid verifiable presentation');
+    }
+
+    const verifiableCredentials: W3CVerifiableCredential[] | undefined =
+      verifiablePresentation.verifiableCredential;
+
+    if (!verifiableCredentials) {
+      throw new Error('There are no verifiable credential');
+    }
+
+    const employeeCredential: W3CVerifiableCredential | undefined =
+      verifiableCredentials.find((credential: W3CVerifiableCredential) =>
+        credential['type'].includes('EmployeeCredential'),
+      );
+
+    if (!employeeCredential) {
+      throw new Error('There are no university credentials present');
+    }
+
+    const credentialSubject: CredentialSubject =
+      employeeCredential['credentialSubject'];
+
+    const attributes: { [key: string]: any } = {};
+
+    attributes['employeeId'] = credentialSubject['employeeId'];
+    attributes['position'] = credentialSubject['position'];
+    attributes['isSeniorEmployee'] =
+      Math.abs(
+        differenceInYears(
+          new Date(credentialSubject['joinedDate']),
+          new Date(),
+        ),
+      ) > 5;
+
+    return await this.didService.getAgent().createVerifiableCredential({
+      credential: {
+        issuer: this.didService.getCompanyIdentifier().did,
+        type: ['VerifiableCredential', 'AccessDelegationCredential'],
+        credentialSubject: {
+          id: verifiablePresentation.holder,
+          credentialId: this.dataService.getData(
+            CREDENTIAL_KEYS.COMPANY_CREDENTIAL_KEY,
+          ).id,
+          attributes,
+          service: {
+            type: 'DIDComm',
+            serviceEndpoint: `${this.SERVICE_ENDPOINT_BASE_URL}/company/company-credential/get`,
+          },
+        },
+      },
+      proofFormat: 'jwt',
+    });
+  }
+
+  // async getCompanyCredential(
+  //   accessDelegationCredential: VerifiableCredential,
+  // ): Promise<VerifiableCredential> {
+  //   const verificationResult: IVerifyResult = await this.didService
+  //     .getAgent()
+  //     .verifyCredential({
+  //       credential: accessDelegationCredential,
+  //     });
+
+  //   if (!verificationResult.verified) {
+  //     throw new Error('Invalid verifiable presentation');
+  //   }
+
+  //   try {
+  //     const policyResponse: AxiosResponse<OPAResponse> = await firstValueFrom(
+  //       this.httpService.post<OPAResponse>(
+  //         `${this.OPA_BASE_URL}/data/company`,
+  //         { input: accessDelegationCredential },
+  //       ),
+  //     );
+
+  //     const responseData: OPAResponse = policyResponse.data;
+
+  //     if (!responseData.result.allow) {
+  //       throw new HttpException(
+  //         'Access Delegation Credential is not valid or owner has revoked access',
+  //         400,
+  //       );
+  //     }
+
+  //     return this.dataService.getData(CREDENTIAL_KEYS.COMPANY_CREDENTIAL_KEY);
+  //   } catch (error) {
+  //     if (error instanceof HttpException) {
+  //       throw error;
+  //     }
+  //     console.log(error);
+  //     console.log('Encountered error when checking policies');
+  //     throw new HttpException('API request failed', 500);
+  //   }
+  // }
+
+  async getCompanyCredential(
+    packedMessage: any,
+  ): Promise<IPackedDIDCommMessage> {
+    const unpackedMessage: IUnpackedDIDCommMessage = await this.didService
+      .getAgent()
+      .unpackDIDCommMessage(packedMessage);
+
+    const verifiablePresentation: VerifiablePresentation = unpackedMessage
+      .message.body as VerifiablePresentation;
+
+    const verificationResult: IVerifyResult = await this.didService
+      .getAgent()
+      .verifyPresentation({
+        presentation: verifiablePresentation,
+      });
+
+    if (!verificationResult.verified) {
+      throw new Error(
+        'Credential Server: verifiable presentation is nor valid',
+      );
+    }
+
+    const verifiableCredentials: W3CVerifiableCredential[] | undefined =
+      verifiablePresentation.verifiableCredential;
+
+    if (!verifiableCredentials) {
+      throw new Error(
+        'Credential Server: there are no valid verifiable credentials present',
+      );
+    }
+
+    const accessDelegationCredential: W3CVerifiableCredential | undefined =
+      verifiableCredentials.find((credential) =>
+        credential['type'].includes('AccessDelegationCredential'),
+      );
+
+    if (!accessDelegationCredential) {
+      throw new Error(
+        'Credential Server: access delegation credential could not be found',
+      );
+    }
+
+    try {
+      const policyResponse: AxiosResponse<OPAResponse> = await firstValueFrom(
+        this.httpService.post<OPAResponse>(
+          `${this.OPA_BASE_URL}/data/company`,
+          { input: accessDelegationCredential },
+        ),
+      );
+
+      const responseData: OPAResponse = policyResponse.data;
+
+      if (!responseData.result.allow) {
+        throw new HttpException(
+          'Access Delegation Credential is not valid or owner has revoked access',
+          400,
+        );
+      }
+
+      const message: IDIDCommMessage = {
+        id: crypto.randomUUID(),
+        type: 'Company Credential Response',
+        from: this.didService.getCompanyIdentifier().did,
+        to: [verifiablePresentation.holder],
+        body: this.dataService.getData(CREDENTIAL_KEYS.COMPANY_CREDENTIAL_KEY),
+      };
+
+      return await this.didService.getAgent().packDIDCommMessage({
+        packing: 'jws',
+        message,
+      });
     } catch (error) {
       if (error instanceof HttpException) {
         throw error;

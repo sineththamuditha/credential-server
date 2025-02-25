@@ -1,14 +1,15 @@
 import { Injectable } from '@nestjs/common';
+import { VerifiableCredential } from '@veramo/core';
 
 @Injectable()
 export class DataService {
-  private tempData: { [key: string]: { [key: string]: any } } = {};
+  private tempData: { [key: string]: VerifiableCredential } = {};
 
-  setData(key: string, data: { [key: string]: any }): void {
+  setData(key: string, data: VerifiableCredential): void {
     this.tempData[key] = data;
   }
 
-  getData(key: string): { [key: string]: any } {
+  getData(key: string): VerifiableCredential {
     return this.tempData[key];
   }
 }
