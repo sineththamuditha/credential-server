@@ -1,7 +1,6 @@
 /* eslint-disable @typescript-eslint/no-unsafe-assignment */
 /* eslint-disable @typescript-eslint/no-unsafe-argument */
 /* eslint-disable @typescript-eslint/no-unsafe-call */
-/* eslint-disable @typescript-eslint/no-unsafe-return */
 /* eslint-disable @typescript-eslint/no-unsafe-member-access */
 import { HttpService } from '@nestjs/axios';
 import { HttpException, Injectable, Logger } from '@nestjs/common';
@@ -249,47 +248,6 @@ export class CredentialService {
       proofFormat: 'jwt',
     });
   }
-
-  // async getCompanyCredential(
-  //   accessDelegationCredential: VerifiableCredential,
-  // ): Promise<VerifiableCredential> {
-  //   const verificationResult: IVerifyResult = await this.didService
-  //     .getAgent()
-  //     .verifyCredential({
-  //       credential: accessDelegationCredential,
-  //     });
-
-  //   if (!verificationResult.verified) {
-  //     throw new Error('Invalid verifiable presentation');
-  //   }
-
-  //   try {
-  //     const policyResponse: AxiosResponse<OPAResponse> = await firstValueFrom(
-  //       this.httpService.post<OPAResponse>(
-  //         `${this.OPA_BASE_URL}/data/company`,
-  //         { input: accessDelegationCredential },
-  //       ),
-  //     );
-
-  //     const responseData: OPAResponse = policyResponse.data;
-
-  //     if (!responseData.result.allow) {
-  //       throw new HttpException(
-  //         'Access Delegation Credential is not valid or owner has revoked access',
-  //         400,
-  //       );
-  //     }
-
-  //     return this.dataService.getData(CREDENTIAL_KEYS.COMPANY_CREDENTIAL_KEY);
-  //   } catch (error) {
-  //     if (error instanceof HttpException) {
-  //       throw error;
-  //     }
-  //     console.log(error);
-  //     console.log('Encountered error when checking policies');
-  //     throw new HttpException('API request failed', 500);
-  //   }
-  // }
 
   async getCompanyCredential(
     packedMessage: any,
