@@ -10,6 +10,7 @@ import { firstValueFrom } from 'rxjs';
 import { DataService } from './data.service';
 import {
   CredentialSubject,
+  IIdentifier,
   IVerifyResult,
   VerifiableCredential,
   VerifiablePresentation,
@@ -31,6 +32,8 @@ export class CredentialService {
   private OPA_BASE_URL: string;
   private ARIES_CLOUD_AGENT_BASE_URL: string;
   private SERVICE_ENDPOINT_BASE_URL: string;
+  private readonly DELEGATOR_CREDENTIAL_KEY = 'delegatorCredentialKey';
+  private delegatorIdentifier: IIdentifier;
 
   constructor(
     private readonly httpService: HttpService,
@@ -320,6 +323,141 @@ export class CredentialService {
         packing: 'jws',
         message,
       });
+    } catch (error) {
+      if (error instanceof HttpException) {
+        throw error;
+      }
+      console.log(error);
+      console.log('Encountered error when checking policies');
+      throw new HttpException('API request failed', 500);
+    }
+  }
+
+  async initializeDelegator(keyType: string) {
+    this.delegatorIdentifier = await this.didService
+      .getAgent()
+      .didManagerGetOrCreate({
+        provider: 'did:key',
+        alias: `delegator_${keyType}`,
+        options: {
+          keyType,
+        },
+      });
+
+    return {
+      delegatorIdentifier: this.delegatorIdentifier.did,
+    };
+  }
+
+  async issueAccessDelegationCredential(
+    verifiablePresentation: VerifiablePresentation,
+  ) {
+    const verificationResult: IVerifyResult = await this.didService
+      .getAgent()
+      .verifyPresentation({
+        presentation: verifiablePresentation,
+      });
+
+    if (!verificationResult.verified) {
+      throw new Error('Invalid verifiable presentation');
+    }
+
+    const verifiableCredentials: W3CVerifiableCredential[] | undefined =
+      verifiablePresentation.verifiableCredential;
+
+    if (!verifiableCredentials) {
+      throw new Error('There are no verifiable credential');
+    }
+
+    const performanceCredential: W3CVerifiableCredential | undefined =
+      verifiableCredentials.find((credential: W3CVerifiableCredential) =>
+        credential['type'].includes('PerformanceCredential'),
+      );
+
+    if (!performanceCredential) {
+      throw new Error('There are no university credentials present');
+    }
+
+    const credentialSubject: CredentialSubject =
+      performanceCredential['credentialSubject'];
+
+    const attributes: { [key: string]: any } = {};
+
+    attributes['keyType'] = credentialSubject['keyType'];
+    attributes['credentialId'] = performanceCredential['id'];
+
+    return await this.didService.getAgent().createVerifiableCredential({
+      credential: {
+        issuer: this.delegatorIdentifier.did,
+        type: ['VerifiableCredential', 'AccessDelegationCredential'],
+        credentialSubject: {
+          id: verifiablePresentation.holder,
+          attributes,
+          service: {
+            type: 'DIDComm',
+            serviceEndpoint: `${this.SERVICE_ENDPOINT_BASE_URL}/performance-credential/get`,
+          },
+        },
+      },
+      proofFormat: 'jwt',
+    });
+  }
+
+  async verifyPresentation(
+    verifiablePresentation: VerifiablePresentation,
+  ): Promise<VerifiableCredential> {
+    const verificationResult: IVerifyResult = await this.didService
+      .getAgent()
+      .verifyPresentation({
+        presentation: verifiablePresentation,
+      });
+
+    if (!verificationResult.verified) {
+      throw new Error('Invalid verifiable presentation');
+    }
+
+    const verifiableCredentials: W3CVerifiableCredential[] | undefined =
+      verifiablePresentation.verifiableCredential;
+
+    if (!verifiableCredentials) {
+      throw new Error('There are no verifiable credential');
+    }
+
+    const accessDelegationCredential: W3CVerifiableCredential | undefined =
+      verifiableCredentials.find((credential: W3CVerifiableCredential) =>
+        credential['type'].includes('AccessDelegationCredential'),
+      );
+
+    if (!accessDelegationCredential) {
+      throw new Error('There are no university credentials present');
+    }
+
+    return accessDelegationCredential as VerifiableCredential;
+  }
+
+  async getPerformanceCredential(
+    accessDelegationCredential: VerifiableCredential,
+  ) {
+    try {
+      const policyResponse: AxiosResponse<OPAResponse> = await firstValueFrom(
+        this.httpService.post<OPAResponse>(
+          `${this.OPA_BASE_URL}/data/performance`,
+          { input: accessDelegationCredential },
+        ),
+      );
+
+      const responseData: OPAResponse = policyResponse.data;
+
+      if (!responseData.result.allow) {
+        throw new HttpException(
+          'Access Delegation Credential is not valid or owner has revoked access',
+          400,
+        );
+      }
+
+      return this.dataService.getData(
+        CREDENTIAL_KEYS.PERFORMANCE_TEST_CREDENTIAL_KEY,
+      );
     } catch (error) {
       if (error instanceof HttpException) {
         throw error;

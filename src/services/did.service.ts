@@ -1,5 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unsafe-call */
-/* eslint-disable @typescript-eslint/no-unsafe-assignment */
 import { Injectable, Logger } from '@nestjs/common';
 import {
   createAgent,
@@ -13,6 +11,7 @@ import {
 } from '@veramo/core';
 import { DIDManager, MemoryDIDStore } from '@veramo/did-manager';
 import { getResolver as EthrDidResolver } from 'ethr-did-resolver';
+import { getResolver as KeyDidResolver } from 'key-did-resolver';
 import { CredentialPlugin } from '@veramo/credential-w3c';
 import { DIDComm, DIDCommMessageHandler, IDIDComm } from '@veramo/did-comm';
 import {
@@ -26,6 +25,7 @@ import { MessageHandler } from '@veramo/message-handler';
 import { EthrDIDProvider } from '@veramo/did-provider-ethr';
 import { DIDResolverPlugin } from '@veramo/did-resolver';
 import { ConfigService } from '@nestjs/config';
+import { KeyDIDProvider } from '@veramo/did-provider-key';
 
 @Injectable()
 export class DIDService {
@@ -90,12 +90,16 @@ export class DIDService {
                 },
               ],
             }),
+            'did:key': new KeyDIDProvider({
+              defaultKms: 'local',
+            }),
           },
         }),
         new DIDResolverPlugin({
           ...EthrDidResolver({
             infuraProjectId: INFURA_PROJECT_ID,
           }),
+          ...KeyDidResolver(),
         }),
         new CredentialPlugin(),
         new DIDComm(),
